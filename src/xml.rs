@@ -1864,7 +1864,7 @@ impl<'a> DecoderKit<'a> for flate2::bufread::ZlibDecoder<&'a [u8]> {
     }
 }
 
-#[cfg(feature = "xz2")]
+#[cfg(all(feature = "xz2", not(target_arch = "wasm32")))]
 impl<'a> DecoderKit<'a> for xz2::read::XzDecoder<&'a [u8]> {
     fn read(&mut self, out: &mut [u8]) -> std::result::Result<usize, ValidationError> {
         Ok(std::io::Read::read(self, out)?)
@@ -2051,11 +2051,11 @@ where
             }
         }
         Compressor::LZMA => {
-            #[cfg(not(feature = "xz2"))]
+            #[cfg(not(all(feature = "xz2", not(target_arch = "wasm32"))))]
             {
                 return Err(ValidationError::MissingCompressionLibrary(ei.compressor));
             }
-            #[cfg(feature = "xz2")]
+            #[cfg(all(feature = "xz2", not(target_arch = "wasm32")))]
             {
                 decompress::<xz2::read::XzDecoder<&'a [u8]>>(
                     [num_blocks, nu, np],

@@ -82,6 +82,7 @@ pub enum CompressionError {
     #[cfg(feature = "flate2")]
     ZLib(flate2::CompressError),
     LZMA(std::io::Error),
+    MissingLZMALibrary,
     None,
 }
 
@@ -93,6 +94,7 @@ impl std::fmt::Display for CompressionError {
             #[cfg(feature = "flate2")]
             CompressionError::ZLib(source) => write!(f, "ZLib: {}", source),
             CompressionError::LZMA(source) => write!(f, "LZMA: {}", source),
+            CompressionError::MissingLZMALibrary => write!(f, "LZMA compression library (xz2) is not available on this platform"),
             _ => write!(f, "Unknown"),
         }
     }
@@ -627,7 +629,7 @@ impl IOBuffer {
                     }
                 }
                 Compressor::LZMA => {
-                    #[cfg(feature = "xz2")]
+                    #[cfg(all(feature = "xz2", not(target_arch = "wasm32")))]
                     {
                         let mut bufs = vec![];
                         for i in 0..num_blocks {
@@ -651,6 +653,10 @@ impl IOBuffer {
                         b64_encode(&out[start..], &mut encoded);
                         log::trace!("[compress]: Encoded size: {:?}", encoded.len());
                         return Ok(encoded);
+                    }
+                    #[cfg(not(all(feature = "xz2", not(target_arch = "wasm32"))))]
+                    {
+                        return Err(Error::Compression(CompressionError::MissingLZMALibrary));
                     }
                 }
                 Compressor::LZ4 => {

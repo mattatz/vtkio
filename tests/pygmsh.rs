@@ -250,7 +250,7 @@ fn xml_ascii() -> Result {
 
 #[test]
 #[cfg(feature = "xml")]
-#[cfg(feature = "xz2")]
+#[cfg(all(feature = "xz2", not(target_arch = "wasm32")))]
 fn xml_lzma() -> Result {
     let mut vtu = Vtk::import("./assets/pygmsh/lzma.vtu")?;
     assert_and_fix_xml_vtu(&mut vtu);
