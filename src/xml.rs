@@ -1003,6 +1003,20 @@ impl Points {
                 .with_name("Points"),
         })
     }
+
+    /// Create Points for AppendedData format.
+    #[cfg(feature = "binary")]
+    pub fn from_io_buffer_appended(
+        buf: model::IOBuffer,
+        ei: EncodingInfo,
+        builder: &mut AppendedDataBuilder,
+    ) -> Result<Points> {
+        let data_array = builder
+            .append_buffer_as_data_array(buf, ei)?
+            .with_num_comp(3)
+            .with_name("Points");
+        Ok(Points { data: data_array })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -1031,6 +1045,34 @@ impl Cells {
                 ei,
             )?
             .with_name("types"),
+        })
+    }
+
+    /// Create Cells for AppendedData format.
+    #[cfg(feature = "binary")]
+    fn from_model_cells_appended(
+        cells: model::Cells,
+        ei: EncodingInfo,
+        builder: &mut AppendedDataBuilder,
+    ) -> Result<Cells> {
+        let model::Cells { cell_verts, types } = cells;
+        let (connectivity, offsets) = cell_verts.into_xml();
+
+        let connectivity_data_array = builder
+            .append_buffer_as_data_array(connectivity.into(), ei)?
+            .with_name("connectivity");
+        let offsets_data_array = builder
+            .append_buffer_as_data_array(offsets.into(), ei)?
+            .with_name("offsets");
+        let types_buf: model::IOBuffer = types.into_iter().map(|x| x as u8).collect();
+        let types_data_array = builder
+            .append_buffer_as_data_array(types_buf, ei)?
+            .with_name("types");
+
+        Ok(Cells {
+            connectivity: connectivity_data_array,
+            offsets: offsets_data_array,
+            types: types_data_array,
         })
     }
 
@@ -1098,6 +1140,26 @@ impl Topo {
             connectivity: DataArray::from_io_buffer(connectivity.into(), ei)?
                 .with_name("connectivity"),
             offsets: DataArray::from_io_buffer(offsets.into(), ei)?.with_name("offsets"),
+        })
+    }
+
+    /// Convert model topology type into `Topo` for AppendedData format.
+    #[cfg(feature = "binary")]
+    fn from_model_topo_appended(
+        topo: model::VertexNumbers,
+        ei: EncodingInfo,
+        builder: &mut AppendedDataBuilder,
+    ) -> Result<Topo> {
+        let (connectivity, offsets) = topo.into_xml();
+        let connectivity_data_array = builder
+            .append_buffer_as_data_array(connectivity.into(), ei)?
+            .with_name("connectivity");
+        let offsets_data_array = builder
+            .append_buffer_as_data_array(offsets.into(), ei)?
+            .with_name("offsets");
+        Ok(Topo {
+            connectivity: connectivity_data_array,
+            offsets: offsets_data_array,
         })
     }
 
@@ -1255,6 +1317,59 @@ impl AttributeData {
         }
         Ok(attribute_data)
     }
+
+    /// Convert model attributes to XML format with AppendedData.
+    #[cfg(feature = "binary")]
+    pub fn from_model_attributes_appended(
+        attribs: Vec<model::Attribute>,
+        ei: EncodingInfo,
+        builder: &mut AppendedDataBuilder,
+    ) -> Result<Self> {
+        let mut attribute_data = AttributeData::default();
+        for attrib in attribs {
+            if let model::Attribute::DataArray(data) = attrib {
+                // Only pick the first found attribute as the active one.
+                match data.elem {
+                    model::ElementType::Scalars { .. } => {
+                        if attribute_data.scalars.is_none() {
+                            attribute_data.scalars = Some(data.name.to_string());
+                        }
+                    }
+                    model::ElementType::Vectors => {
+                        if attribute_data.vectors.is_none() {
+                            attribute_data.vectors = Some(data.name.to_string());
+                        }
+                    }
+                    model::ElementType::Normals => {
+                        if attribute_data.normals.is_none() {
+                            attribute_data.normals = Some(data.name.to_string());
+                        }
+                    }
+                    model::ElementType::TCoords(_) => {
+                        if attribute_data.tcoords.is_none() {
+                            attribute_data.tcoords = Some(data.name.to_string());
+                        }
+                    }
+                    model::ElementType::Tensors => {
+                        if attribute_data.tensors.is_none() {
+                            attribute_data.tensors = Some(data.name.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+
+                let num_comp = u32::try_from(data.num_comp()).unwrap();
+                let name = data.name.clone();
+                let data_array = builder
+                    .append_buffer_as_data_array(data.data, ei)?
+                    .with_name(name)
+                    .with_num_comp(num_comp);
+                attribute_data.data_array.push(data_array);
+            }
+            // Field attributes are not supported, they are simply ignored.
+        }
+        Ok(attribute_data)
+    }
     pub fn into_model_attributes(
         self,
         n: usize,
@@ -1303,6 +1418,21 @@ impl Coordinates {
         })
     }
 
+    /// Construct `Coordinates` from `model::Coordinates` for AppendedData format.
+    #[cfg(feature = "binary")]
+    pub fn from_model_coords_appended(
+        coords: model::Coordinates,
+        ei: EncodingInfo,
+        builder: &mut AppendedDataBuilder,
+    ) -> Result<Self> {
+        let x_data_array = builder.append_buffer_as_data_array(coords.x, ei)?;
+        let y_data_array = builder.append_buffer_as_data_array(coords.y, ei)?;
+        let z_data_array = builder.append_buffer_as_data_array(coords.z, ei)?;
+        Ok(Coordinates {
+            data_array: [x_data_array, y_data_array, z_data_array],
+        })
+    }
+
     /// Given the expected number of elements and an optional appended data,
     /// converts this struct into a `mode::Coordinates` type.
     pub fn into_model_coordinates(
@@ -1329,6 +1459,11 @@ pub struct EncodingInfo {
     pub compressor: Compressor,
     // Note that compression level is meaningless during decoding.
     pub compression_level: u32,
+    /// The encoding format used for AppendedData.
+    /// When set to `Encoding::Raw`, data will be written in raw binary format
+    /// instead of base64 encoding.
+    #[cfg(feature = "binary")]
+    pub encoding: Encoding,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1466,6 +1601,27 @@ impl DataArray {
     /// Returns the given `DataArray` with the given number of components `num_comp`.
     pub fn with_num_comp(self, num_comp: u32) -> Self {
         DataArray { num_comp, ..self }
+    }
+
+    /// Construct a `DataArray` for AppendedData format with the given offset.
+    ///
+    /// This creates a DataArray that references data stored in the AppendedData section.
+    /// The actual binary data should be added to the AppendedDataBuilder separately.
+    #[cfg(feature = "binary")]
+    pub fn for_appended_data(
+        buf: &model::IOBuffer,
+        offset: u32,
+    ) -> Self {
+        let range = buf.compute_range();
+        DataArray {
+            scalar_type: buf.scalar_type().into(),
+            range_min: range.map(|x| x.0),
+            range_max: range.map(|x| x.1),
+            format: DataArrayFormat::Appended,
+            offset: Some(offset),
+            data: vec![],
+            ..Default::default()
+        }
     }
 
     /// Helper to extract possibly compressed binary data from a `String` in `IOBuffer` format.
@@ -2160,6 +2316,98 @@ impl AppendedData {
     }
 }
 
+/// Builder for constructing `AppendedData` with raw binary encoding.
+///
+/// This builder collects raw binary data from multiple `IOBuffer`s and constructs
+/// an `AppendedData` structure suitable for VTK XML files with raw encoding.
+#[cfg(feature = "binary")]
+pub struct AppendedDataBuilder {
+    data: Vec<u8>,
+    encoding: Encoding,
+}
+
+#[cfg(feature = "binary")]
+impl AppendedDataBuilder {
+    /// Create a new builder with the specified encoding.
+    pub fn new(encoding: Encoding) -> Self {
+        AppendedDataBuilder {
+            data: Vec::new(),
+            encoding,
+        }
+    }
+
+    /// Returns the current offset (byte position) in the appended data.
+    pub fn current_offset(&self) -> u32 {
+        self.data.len() as u32
+    }
+
+    /// Append raw bytes from an IOBuffer and return a DataArray configured for AppendedData format.
+    ///
+    /// The returned DataArray has the correct offset and scalar type set.
+    pub fn append_buffer_as_data_array(
+        &mut self,
+        buffer: model::IOBuffer,
+        ei: EncodingInfo,
+    ) -> Result<DataArray> {
+        let offset = self.current_offset();
+        let scalar_type = buffer.scalar_type().into();
+        let range = buffer.compute_range();
+
+        match self.encoding {
+            Encoding::Raw => {
+                let bytes = buffer.into_raw_bytes_with_size(ei)?;
+                self.data.extend(bytes);
+            }
+            Encoding::Base64 => {
+                let encoded = buffer.into_bytes_with_size_encoded(ei, |x, s| {
+                    BASE64_STANDARD.encode_string(x, s);
+                })?;
+                self.data.extend(encoded.into_bytes());
+            }
+        }
+
+        Ok(DataArray {
+            scalar_type,
+            format: DataArrayFormat::Appended,
+            offset: Some(offset),
+            range_min: range.map(|x| x.0),
+            range_max: range.map(|x| x.1),
+            data: vec![],
+            ..Default::default()
+        })
+    }
+
+    /// Append raw bytes from an IOBuffer and return the offset where this data starts.
+    ///
+    /// The returned offset can be used in the DataArray's offset attribute.
+    pub fn append_buffer(&mut self, buffer: model::IOBuffer, ei: EncodingInfo) -> Result<u32> {
+        let offset = self.current_offset();
+
+        match self.encoding {
+            Encoding::Raw => {
+                let bytes = buffer.into_raw_bytes_with_size(ei)?;
+                self.data.extend(bytes);
+            }
+            Encoding::Base64 => {
+                let encoded = buffer.into_bytes_with_size_encoded(ei, |x, s| {
+                    BASE64_STANDARD.encode_string(x, s);
+                })?;
+                self.data.extend(encoded.into_bytes());
+            }
+        }
+
+        Ok(offset)
+    }
+
+    /// Build the final `AppendedData` structure.
+    pub fn build(self) -> AppendedData {
+        AppendedData {
+            encoding: self.encoding,
+            data: RawData(self.data),
+        }
+    }
+}
+
 /// A file type descriptor of a XML VTK data file.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct FileType {
@@ -2488,14 +2736,16 @@ impl TryFrom<VTKFile> for model::Vtk {
             ..
         } = xml;
 
+        let appended_data = appended_data.as_ref();
+
         let encoding_info = EncodingInfo {
             byte_order,
             header_type: header_type.unwrap_or(ScalarType::UInt32),
             compressor,
             compression_level: 0, // This is meaningless when decoding
+            #[cfg(feature = "binary")]
+            encoding: appended_data.map(|a| a.encoding).unwrap_or(Encoding::Base64),
         };
-
-        let appended_data = appended_data.as_ref();
 
         // Validate that the expected data set type corresponds to the actual
         // stored data set.
@@ -2956,6 +3206,8 @@ impl model::Vtk {
             header_type,
             compressor,
             compression_level,
+            #[cfg(feature = "binary")]
+            encoding: Encoding::Base64,
         };
 
         let data_set = match data_set {
@@ -3189,6 +3441,293 @@ impl model::Vtk {
             header_type: Some(header_type),
             compressor,
             appended_data: None,
+            data_set,
+        })
+    }
+
+    /// Converts the given Vtk model into an XML format with AppendedData using raw binary encoding.
+    ///
+    /// Unlike `try_into_xml_format`, this method stores all binary data in the AppendedData section
+    /// using raw binary encoding instead of base64. This results in smaller file sizes and faster
+    /// I/O, but produces files that contain binary data mixed with XML.
+    ///
+    /// # Arguments
+    /// * `compressor` - The compression algorithm to use (or `Compressor::None` for no compression)
+    /// * `compression_level` - Compression level (0-9), where 0 means no compression
+    ///
+    /// Note: Compression with raw encoding is currently not supported. If compression is requested,
+    /// it will be ignored and data will be written uncompressed.
+    #[cfg(feature = "binary")]
+    pub fn try_into_xml_format_with_appended_raw(self) -> Result<VTKFile> {
+        let model::Vtk {
+            version,
+            byte_order,
+            data: data_set,
+            file_path,
+            ..
+        } = self;
+
+        let source_path = file_path.as_ref().map(|p| p.as_ref());
+
+        let header_type = ScalarType::UInt64;
+
+        let encoding_info = EncodingInfo {
+            byte_order,
+            header_type,
+            compressor: Compressor::None,
+            compression_level: 0,
+            encoding: Encoding::Raw,
+        };
+
+        let mut appended_builder = AppendedDataBuilder::new(Encoding::Raw);
+
+        let data_set = match data_set {
+            model::DataSet::ImageData {
+                extent,
+                origin,
+                spacing,
+                pieces,
+                ..
+            } => DataSet::ImageData(ImageData {
+                whole_extent: extent.into(),
+                origin,
+                spacing,
+                pieces: pieces
+                    .into_iter()
+                    .map(|piece| {
+                        let piece_data = piece.into_loaded_piece_data(source_path)?;
+                        let model::ImageDataPiece { extent, data } = piece_data;
+                        Ok(Piece {
+                            extent: Some(extent.into()),
+                            point_data: AttributeData::from_model_attributes_appended(
+                                data.point,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            cell_data: AttributeData::from_model_attributes_appended(
+                                data.cell,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            ..Default::default()
+                        })
+                    })
+                    .collect::<Result<Vec<Piece>>>()?,
+            }),
+            model::DataSet::StructuredGrid {
+                extent,
+                pieces,
+                ..
+            } => DataSet::StructuredGrid(Grid {
+                whole_extent: extent.into(),
+                pieces: pieces
+                    .into_iter()
+                    .map(|piece| {
+                        let piece_data = piece.into_loaded_piece_data(source_path)?;
+                        let model::StructuredGridPiece {
+                            extent,
+                            points,
+                            data,
+                        } = piece_data;
+                        Ok(Piece {
+                            extent: Some(extent.into()),
+                            points: Some(Points::from_io_buffer_appended(
+                                points,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?),
+                            point_data: AttributeData::from_model_attributes_appended(
+                                data.point,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            cell_data: AttributeData::from_model_attributes_appended(
+                                data.cell,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            ..Default::default()
+                        })
+                    })
+                    .collect::<Result<Vec<Piece>>>()?,
+            }),
+            model::DataSet::RectilinearGrid {
+                extent,
+                pieces,
+                ..
+            } => DataSet::RectilinearGrid(Grid {
+                whole_extent: extent.into(),
+                pieces: pieces
+                    .into_iter()
+                    .map(|piece| {
+                        let piece_data = piece.into_loaded_piece_data(source_path)?;
+                        let model::RectilinearGridPiece {
+                            extent,
+                            coords,
+                            data,
+                        } = piece_data;
+                        Ok(Piece {
+                            extent: Some(extent.into()),
+                            coordinates: Some(Coordinates::from_model_coords_appended(
+                                coords,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?),
+                            point_data: AttributeData::from_model_attributes_appended(
+                                data.point,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            cell_data: AttributeData::from_model_attributes_appended(
+                                data.cell,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            ..Default::default()
+                        })
+                    })
+                    .collect::<Result<Vec<Piece>>>()?,
+            }),
+            model::DataSet::UnstructuredGrid {
+                pieces,
+                ..
+            } => DataSet::UnstructuredGrid(Unstructured {
+                pieces: pieces
+                    .into_iter()
+                    .map(|piece| {
+                        let piece_data = piece.into_loaded_piece_data(source_path)?;
+                        let num_points = piece_data.num_points();
+                        let model::UnstructuredGridPiece {
+                            points,
+                            cells,
+                            data,
+                        } = piece_data;
+
+                        let num_cells = cells.num_cells();
+
+                        Ok(Piece {
+                            number_of_points: u32::try_from(num_points).unwrap(),
+                            number_of_cells: u32::try_from(num_cells).unwrap(),
+                            points: Some(Points::from_io_buffer_appended(
+                                points,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?),
+                            cells: Some(Cells::from_model_cells_appended(
+                                cells,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?),
+                            point_data: AttributeData::from_model_attributes_appended(
+                                data.point,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            cell_data: AttributeData::from_model_attributes_appended(
+                                data.cell,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            ..Default::default()
+                        })
+                    })
+                    .collect::<Result<Vec<Piece>>>()?,
+            }),
+            model::DataSet::PolyData {
+                pieces,
+                ..
+            } => DataSet::PolyData(Unstructured {
+                pieces: pieces
+                    .into_iter()
+                    .map(|piece| {
+                        let piece_data = piece.into_loaded_piece_data(source_path)?;
+                        let num_points = piece_data.num_points();
+                        let model::PolyDataPiece {
+                            points,
+                            verts,
+                            lines,
+                            polys,
+                            strips,
+                            data,
+                        } = piece_data;
+
+                        Ok(Piece {
+                            number_of_points: u32::try_from(num_points).unwrap(),
+                            points: Some(Points::from_io_buffer_appended(
+                                points,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?),
+                            verts: verts.map(|v| {
+                                Topo::from_model_topo_appended(v, encoding_info, &mut appended_builder).unwrap()
+                            }),
+                            lines: lines.map(|l| {
+                                Topo::from_model_topo_appended(l, encoding_info, &mut appended_builder).unwrap()
+                            }),
+                            polys: polys.map(|p| {
+                                Topo::from_model_topo_appended(p, encoding_info, &mut appended_builder).unwrap()
+                            }),
+                            strips: strips.map(|s| {
+                                Topo::from_model_topo_appended(s, encoding_info, &mut appended_builder).unwrap()
+                            }),
+                            point_data: AttributeData::from_model_attributes_appended(
+                                data.point,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            cell_data: AttributeData::from_model_attributes_appended(
+                                data.cell,
+                                encoding_info,
+                                &mut appended_builder,
+                            )?,
+                            ..Default::default()
+                        })
+                    })
+                    .collect::<Result<Vec<Piece>>>()?,
+            }),
+            model::DataSet::Field { data_array, .. } => {
+                // Convert a legacy field data set into image data with a piece for each data_array.
+                let max_count = data_array.iter().map(|v| v.len()).max().unwrap_or(0) as i32;
+                DataSet::ImageData(ImageData {
+                    whole_extent: Extent([0, max_count, 0, 0, 0, 0]),
+                    origin: [0.0; 3],
+                    spacing: [1.0; 3],
+                    pieces: data_array
+                        .into_iter()
+                        .map(|data| {
+                            let extent = Extent([0, data.len() as i32, 0, 0, 0, 0]);
+                            let name = data.name.clone();
+                            let num_comp = data.elem;
+                            let offset = appended_builder
+                                .append_buffer(data.data, encoding_info)?;
+                            Ok(Piece {
+                                extent: Some(extent),
+                                cell_data: AttributeData {
+                                    data_array: vec![DataArray::for_appended_data(
+                                        &model::IOBuffer::F32(vec![]),
+                                        offset,
+                                    )
+                                    .with_name(name)
+                                    .with_num_comp(num_comp)],
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                })
+            }
+        };
+
+        let data_set_type = DataSetType::from(&data_set);
+
+        Ok(VTKFile {
+            data_set_type,
+            version,
+            byte_order,
+            header_type: Some(header_type),
+            compressor: Compressor::None,
+            appended_data: Some(appended_builder.build()),
             data_set,
         })
     }
@@ -3833,6 +4372,8 @@ mod tests {
             header_type: ScalarType::Float64,
             compressor: Compressor::None,
             compression_level: 0,
+            #[cfg(feature = "binary")]
+            encoding: Encoding::Base64,
         };
         let data_fa = data.into_field_array(3, None, encoding_info);
         let data_empty_fa = data_empty.into_field_array(0, None, encoding_info);

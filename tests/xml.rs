@@ -421,3 +421,73 @@ fn single_tet_vtu() -> Result {
     assert_eq!(vtu, make_tet_vtu());
     Ok(())
 }
+
+/// Test writing VTK files with raw encoding in AppendedData format.
+#[cfg(feature = "binary")]
+#[test]
+fn hexahedron_write_raw_roundtrip() -> Result {
+    use std::io::Cursor;
+
+    init();
+
+    // Create a hexahedron VTK model
+    let vtk = make_hexahedron_vtu();
+
+    // Convert to XML format with raw encoding
+    let vtkfile = vtk.clone().try_into_xml_format_with_appended_raw()?;
+
+    // Verify the AppendedData is present and has raw encoding
+    assert!(vtkfile.appended_data.is_some());
+    assert_eq!(
+        vtkfile.appended_data.as_ref().unwrap().encoding,
+        vtkio::xml::Encoding::Raw
+    );
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    vtkfile.write(&mut buf)?;
+
+    // Read back
+    let mut imported = Vtk::parse_xml(BufReader::new(Cursor::new(&buf)))?;
+    imported.file_path = None;
+
+    // Verify the data matches
+    assert_eq!(imported, vtk);
+
+    Ok(())
+}
+
+/// Test writing and reading back a tet VTK file with raw encoding.
+#[cfg(feature = "binary")]
+#[test]
+fn tet_write_raw_roundtrip() -> Result {
+    use std::io::Cursor;
+
+    init();
+
+    // Create a tet VTK model
+    let vtk = make_tet_vtu();
+
+    // Convert to XML format with raw encoding
+    let vtkfile = vtk.clone().try_into_xml_format_with_appended_raw()?;
+
+    // Verify the AppendedData is present and has raw encoding
+    assert!(vtkfile.appended_data.is_some());
+    assert_eq!(
+        vtkfile.appended_data.as_ref().unwrap().encoding,
+        vtkio::xml::Encoding::Raw
+    );
+
+    // Write to buffer
+    let mut buf = Vec::new();
+    vtkfile.write(&mut buf)?;
+
+    // Read back
+    let mut imported = Vtk::parse_xml(BufReader::new(Cursor::new(&buf)))?;
+    imported.file_path = None;
+
+    // Verify the data matches
+    assert_eq!(imported, vtk);
+
+    Ok(())
+}

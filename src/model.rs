@@ -523,6 +523,50 @@ impl IOBuffer {
         })
     }
 
+    /// Converts this `IOBuffer` into raw bytes with a size prefix.
+    ///
+    /// Unlike `into_bytes_with_size_encoded`, this method does not apply base64 encoding.
+    /// The size of the scalar type in bytes is stored as an integer at the very beginning.
+    /// The integer is either 64-bit or 32-bit depending on the header type in
+    /// the given `EncodingInfo`.
+    ///
+    /// This is used for raw binary encoding in VTK XML files with AppendedData format.
+    #[cfg(feature = "binary")]
+    pub fn into_raw_bytes_with_size(
+        self,
+        ei: crate::xml::EncodingInfo,
+    ) -> Result<Vec<u8>, Error> {
+        use crate::xml::ScalarType;
+        use byteorder::WriteBytesExt;
+        use byteorder::{BE, LE};
+
+        let prefix_size: usize = ei.header_type.size();
+        let num_bytes = self.num_bytes();
+
+        let mut out = Vec::with_capacity(prefix_size + num_bytes);
+        out.resize(prefix_size, 0u8);
+
+        // Write the data
+        self.write_bytes(&mut out, ei.byte_order);
+
+        // Write the size prefix
+        {
+            let mut cursor = std::io::Cursor::new(&mut out[..prefix_size]);
+            match ei.header_type {
+                ScalarType::UInt64 => match ei.byte_order {
+                    ByteOrder::BigEndian => cursor.write_u64::<BE>(num_bytes as u64)?,
+                    ByteOrder::LittleEndian => cursor.write_u64::<LE>(num_bytes as u64)?,
+                },
+                _ => match ei.byte_order {
+                    ByteOrder::BigEndian => cursor.write_u32::<BE>(num_bytes as u32)?,
+                    ByteOrder::LittleEndian => cursor.write_u32::<LE>(num_bytes as u32)?,
+                },
+            }
+        }
+
+        Ok(out)
+    }
+
     // Rustfmt removes the extra layer of curly braces, which breaks the feature attribute
     // specifications.
     #[rustfmt::skip]
